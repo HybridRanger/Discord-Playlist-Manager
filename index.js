@@ -1,11 +1,15 @@
 //--- requirements ---//
 require("dotenv").config();
 
-const {Client, Collection, Events, GatewayIntentBits, SlashCommandBuilder} = require("discord.js");
-const { joinVoiceChannel } = require('@discordjs/voice');
+const {Client, Collection, GatewayIntentBits} = require("discord.js");
 const {REST} = require("@discordjs/rest");
 const {Routes} = require("discord-api-types/v9");
 const {Player} = require("discord-player");
+
+//--- source extractors ---//
+const {SpotifyExtractor} = require("discord-player-spotify");
+const {YoutubeiExtractor} = require("discord-player-youtubei");
+const { DefaultExtractors, VimeoExtractor, ReverbnationExtractor, SoundCloudExtractor} = require("@discord-player/extractor");
 
 const fs = require("fs");
 const path = require("path");
@@ -30,42 +34,62 @@ for(const file of commandFiles)
     const filePath = path.join(commandsPath, file);
     const command = require(filePath);
 
-    console.log(command.data.name);
+    if ('data' in command && 'execute' in command) {
+        client.commands.set(command.data.name, command);
+    } else {
+        console.log(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`);
+    }
 
-    client.commands.set(command.data.name, command);
     commands.push(command.data.toJSON());
 };
 
 //--- player setup ---/ /
+const player = new Player(client);
+
+/*
 client.player = new Player(client, {
     ytdlOptions: {
         quality: "highestaudio",
         highWaterMark: 1 << 25
     }
-});
+});*/
 
-client.on("ready", () => {
-    const guild_ids = client.guilds.cache.map(guild => guild.id);
+//--- register commands ---//
+const rest = new REST().setToken(process.env.TOKEN);
 
-    const rest = new REST({version: "9"}).setToken(process.env.TOKEN);
-    for (const guildId of guild_ids)
-    {
-        rest.put(Routes.applicationGuildCommands(process.env.CLIENT_ID, guildId), {
-            bpdy: commands
-        })
-        .then(() => console.log(`Added ${commands.length} commands to ${guildId}`))
-        .catch(console.error);
-    }
-});
 
-client.on("interactionCreate", async interation => {
+(async () => {
+    // deploy extractors
+    //await player.extractors.loadMulti(DefaultExtractors);
+    await player.extractors.loadMulti([SpotifyExtractor, YoutubeiExtractor]);
+
+    // deploy commands
+	try {
+		console.log(`Started refreshing ${commands.length} application (/) commands.`);
+
+		// refresh all commands in the guild with the current set
+		const data = await rest.put(
+			Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
+			{ body: commands },
+		);
+
+		console.log(`Successfully reloaded ${data.length} application (/) commands.`);
+	} catch (error) {
+		console.error(error);
+	}
+})();
+
+// 
+client.on("interactionCreate", async interaction => {
     if (!interaction.isCommand()) return;
 
     const command = client.commands.get(interaction.commandName);
     if (!command) return;
 
     try{
+        await interaction.deferReply();
         await command.execute({client, interaction});
+        //interaction.editReply();
     }
     catch(err)
     {
